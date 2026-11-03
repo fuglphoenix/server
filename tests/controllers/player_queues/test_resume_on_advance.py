@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from music_assistant_models.enums import PlaybackState, RepeatMode
-from music_assistant_models.media_items import Audiobook, ProviderMapping, Track
+from music_assistant_models.media_items import (
+    Audiobook,
+    ItemMapping,
+    PodcastEpisode,
+    ProviderMapping,
+    Track,
+)
 from music_assistant_models.player_queue import PlayerQueue, PlayLogEntry
 from music_assistant_models.queue_item import QueueItem
 
@@ -43,6 +49,27 @@ def _book(item_id: str, resume_position_ms: int = 0) -> QueueItem:
             duration=120,
             resume_position_ms=resume_position_ms,
             provider_mappings=_mappings(item_id),
+        ),
+    )
+
+
+def _episode(item_id: str, resume_position_ms: int = 0, fully_played: bool = False) -> QueueItem:
+    return QueueItem(
+        queue_id=QUEUE_ID,
+        queue_item_id=item_id,
+        name=item_id,
+        duration=120,
+        media_item=PodcastEpisode(
+            item_id=item_id,
+            provider="filesystem_local--1",
+            name=item_id,
+            duration=120,
+            resume_position_ms=resume_position_ms,
+            fully_played=fully_played,
+            provider_mappings=_mappings(item_id),
+            podcast=ItemMapping(
+                item_id="podcast-1", provider="filesystem_local--1", name="podcast-1"
+            ),
         ),
     )
 
@@ -247,3 +274,24 @@ async def test_next_track_starts_from_the_beginning() -> None:
     await controller.load_next_queue_item(QUEUE_ID, "book-a")
 
     assert get_stream_details.call_args.kwargs["seek_position"] == 0
+
+
+async def test_next_fully_played_episode_starts_from_the_beginning() -> None:
+    """A finished episode keeps its end position in the playlog; replaying it starts at 0:00."""
+    items = [_episode("ep-a"), _episode("ep-b", resume_position_ms=119000, fully_played=True)]
+    controller, get_stream_details = _controller(items)
+
+    await controller.load_next_queue_item(QUEUE_ID, "ep-a")
+
+    assert get_stream_details.call_args.kwargs["seek_position"] == 0
+
+
+async def test_finished_episode_left_part_way_this_time_resumes_there() -> None:
+    """Progress reported during this queue replaces the stale fully played flag."""
+    items = [_episode("ep-a"), _episode("ep-b", resume_position_ms=119000, fully_played=True)]
+    controller, get_stream_details = _controller(items)
+    _report_played(controller, items[1], seconds_played=40, now=items[0])
+
+    await controller.load_next_queue_item(QUEUE_ID, "ep-a")
+
+    assert get_stream_details.call_args.kwargs["seek_position"] == 39
